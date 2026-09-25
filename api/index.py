@@ -1,51 +1,44 @@
-from fastapi import FastAPI
 import requests
+from fastapi import FastAPI
 
 app = FastAPI()
 
-
-@app.get("/")
-def home():
-  return {"status": "API Proxy đang chạy!"}
+# ... (Giữ nguyên các route cũ nếu có) ...
 
 
-# API nhận từ khóa và gọi web/Google giả lập hoặc tìm kiếm
-@app.get("/api/search")
-def search_google(query: str):
+# API Trung Gian Lấy Dữ Liệu TikTok Cho Roblox
+@app.get("/api/tiktok")
+def get_tiktok(url: str):
   try:
-    # Ví dụ dùng API công khai hoặc cào dữ liệu nhẹ từ một nguồn mở qua Python
-    # Ở đây dùng một public API dạng JSON tương đương để Roblox dễ đọc
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            ' (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+    }
+    # Gọi tới TikWM từ Python để tránh Cloudflare chặn Roblox
     res = requests.get(
-        f"https://api.duckduckgo.com/?q={query}&format=json", timeout=5
+        f'https://www.tikwm.com/api/?url={url}', headers=headers, timeout=10
     )
     data = res.json()
 
-    # Lấy câu trả lời tóm tắt nếu có
-    abstract = data.get("AbstractText", "")
-    if not abstract:
-      abstract = (
-          "Không tìm thấy kết quả tóm tắt trực tiếp, nhưng API đã nhận từ khóa."
-      )
+    if data.get('code') == 0 and 'data' in data:
+      t_data = data['data']
+      return {
+          'success': True,
+          'author': t_data.get('author', {}).get('nickname', 'Không rõ'),
+          'unique_id': t_data.get('author', {}).get('unique_id', 'Không rõ'),
+          'title': t_data.get('title', 'Không có tiêu đề'),
+          'likes': t_data.get('digg_count', 0),
+          'views': t_data.get('play_count', 0),
+          'comments': t_data.get('comment_count', 0),
+          'music': t_data.get('music_info', {}).get('title', 'Không có nhạc'),
+      }
+    else:
+      return {
+          'success': False,
+          'error': data.get('msg', 'Link sai hoặc video riêng tư'),
+      }
 
-    return {"success": True, "query": query, "result": abstract}
   except Exception as e:
-    return {"success": False, "error": str(e)}
-
-
-# Route 3: Xử lý dữ liệu từ ứng dụng gửi tới (Phương thức POST)
-@app.post("/api/process")
-def process_data(data: DataModel):
-  text_received = data.message
-  sender = data.user_id
-
-  # Viết logic xử lý dữ liệu của bạn tại đây
-  reply_text = (
-      f"Chào {sender}! API đã nhận và xử lý xong nội dung: '{text_received}'"
-  )
-
-  return {
-      "success": True,
-      "received": text_received,
-      "sender": sender,
-      "api_response": reply_text,
-  }
+    return {'success': False, 'error': str(e)}
