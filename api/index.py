@@ -1,44 +1,82 @@
-import requests
-from fastapi import FastAPI
+import json
+from urllib.parse import urlparse, parse_qs
+from http.server import BaseHTTPRequestHandler
+import yt_dlp
+import cv2
 
-app = FastAPI()
-
-# ... (Giữ nguyên các route cũ nếu có) ...
-
-
-# API Trung Gian Lấy Dữ Liệu TikTok Cho Roblox
-@app.get("/api/tiktok")
-def get_tiktok(url: str):
-  try:
-    headers = {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            ' (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
+def get_video_frames(video_url, resolution=32, max_frames=8):
+    # Cấu hình yt-dlp để lấy định dạng thấp nhất (nhanh nhất)
+    ydl_opts = {
+        'format': 'worst[ext=mp4]', 
+        'quiet': True,
+        'noplaylist': True
     }
-    # Gọi tới TikWM từ Python để tránh Cloudflare chặn Roblox
-    res = requests.get(
-        f'https://www.tikwm.com/api/?url={url}', headers=headers, timeout=10
-    )
-    data = res.json()
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            stream_url = info['url']
+    except Exception as e:
+        return {"error": f"Lỗi lấy link video: {str(e)}"}
 
-    if data.get('code') == 0 and 'data' in data:
-      t_data = data['data']
-      return {
-          'success': True,
-          'author': t_data.get('author', {}).get('nickname', 'Không rõ'),
-          'unique_id': t_data.get('author', {}).get('unique_id', 'Không rõ'),
-          'title': t_data.get('title', 'Không có tiêu đề'),
-          'likes': t_data.get('digg_count', 0),
-          'views': t_data.get('play_count', 0),
-          'comments': t_data.get('comment_count', 0),
-          'music': t_data.get('music_info', {}).get('title', 'Không có nhạc'),
-      }
-    else:
-      return {
-          'success': False,
-          'error': data.get('msg', 'Link sai hoặc video riêng tư'),
-      }
+    # Mở luồng video bằng OpenCV
+    cap = cv2.VideoCapture(stream_url)
+    frames_data = []
+    count = 0
+    
+    while cap.isOpened() and count < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Resize khung hình về kích thước (ví dụ: 32x32)
+        frame_resized = cv2.resize(frame, (resolution, resolution))
+        # Chuyển đổi hệ màu từ BGR (OpenCV) sang RGB
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        
+        pixel_data = []
+        for y in range(resolution):
+            for x in range(resolution):
+                r, g, b = frame_rgb[y, x]
+                pixel_data.append({
+                    "x": x + 1,
+                    "y": y + 1,
+                    "r": int(r),
+                    "g": int(g),
+                    "b": int(b)
+                })
+        
+        frames_data.append(pixel_data)
+        count += 1
+        
+        # Nhảy cóc khung hình (Skip frames) để video chạy giống stop-motion
+        # Bỏ qua 15 khung hình tiếp theo (~0.5 giây của video)
+        for _ in range(15): 
+            cap.read()
+            
+    cap.release()
+    return frames_data
 
-  except Exception as e:
-    return {'success': False, 'error': str(e)}
+# Hàm Handler mặc định của Vercel
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        query = parse_qs(parsed_path.query)
+        
+        url = query.get('url', [''])[0]
+        res = int(query.get('res', ['32'])[0])
+        
+        # Cấu hình Header trả về JSON và cho phép Roblox truy cập (CORS)
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        
+        if not url:
+            error_msg = json.dumps({"error": "Vui lòng cung cấp url. Ví dụ: ?url=LINK&res=32"})
+            self.wfile.write(error_msg.encode('utf-8'))
+            return
+            
+        # Lấy dữ liệu và trả về JSON
+        data = get_video_frames(url, res)
+        self.wfile.write(json.dumps(data).encode('utf-8'))
